@@ -18,9 +18,9 @@ formatter_app = logging.Formatter('%(asctime)s >> %(levelname)s >> %(filename)s 
 formatter_activity = logging.Formatter('%(asctime)s >> %(message)s')
 
 # TSETMC Activity Logger
-logger_activity = setup_logger('activity.log', formatter_activity, name='activity')
+data_log = setup_logger('data_io.log', formatter_activity, name='activity')
 # App Debugging Logger
-logger_app = setup_logger('app.log', formatter_app, name='app')
+debugging_log = setup_logger('debug.log', formatter_app, name='app')
 
 
 #▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬ Parsi Tools ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬#
