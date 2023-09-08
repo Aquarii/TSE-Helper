@@ -20,7 +20,7 @@ formatter_activity = logging.Formatter('%(asctime)s >> %(message)s')
 # TSETMC Activity Logger
 data_log = setup_logger('data_io.log', formatter_activity, name='activity')
 # App Debugging Logger
-debugging_log = setup_logger('debug.log', formatter_app, name='app')
+debug_log = setup_logger('debug.log', formatter_app, name='app')
 
 
 #▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬ Parsi Tools ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬#
@@ -36,3 +36,29 @@ def ar_to_fa_series(series):
 
 def fa_to_ar_series(series):
     return series.str.replace('ک','ك').str.replace('ی', 'ي').str.replace('\u200c',' ').str.replace('_',' ').str.strip()
+
+#
+def flatten_json(y):
+    out = {}
+    
+    def flatten(x, name =''):
+        
+        # If the Nested key-value pair is of dict type
+        if type(x) is dict:
+            
+            for a in x:
+                flatten(x[a], name + a + '_')
+                
+        # If the Nested key-value pair is of list type
+        elif type(x) is list:
+            
+            i = 0
+            
+            for a in x:                
+                flatten(a, name + str(i) + '_')
+                i += 1
+        else:
+            out[name[:-1]] = x
+        
+    flatten(y)
+    return out
