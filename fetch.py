@@ -1,7 +1,7 @@
 from typing import Union
 from io import StringIO
 from glob import glob
-from os.path import normpath
+from os import path
 import zeep
 from utils import (
     debug_log,
@@ -12,8 +12,8 @@ from utils import (
     fa_to_ar_series,
     flatten_json,
 )
-import config
-from decorators import calculate_MA
+from config import *
+from decorators import calculate_MA, clean_data
 import requests
 import json
 import pandas as pd
@@ -25,6 +25,9 @@ request_headers = {
 }
 cookie_jar = {"ASP.NET_SessionId": "wa40en1alwxzjnqehjntrv5j"}
 
+################################################################################################
+#                                       LAST TRADING DAY                                       #
+################################################################################################
 
 def last_possible_deven():
     client = zeep.Client("http://service.tsetmc.com/WebService/TseClient.asmx?wsdl")
@@ -34,20 +37,6 @@ def last_possible_deven():
         if last_workday.split(";")[1] == last_workday.split(";")[0]
         else print(last_workday)
     )  # for debuging purposes
-
-################################################################################################
-#                                         GET IDENTITY                                         #
-################################################################################################
-
-def get_identity(insCode):
-    data_log.info(f'Going for Identity of "{insCode}"')
-    result = requests.get(
-        config.IDENTITY_URL.format(insCode), headers=request_headers, cookies=cookie_jar
-    )
-    result.raise_for_status()  # raises exception when not a 2xx response
-    result = json.loads(result.text)
-    data_log.info(f'Identity of "{insCode}" recieved correctly.')
-    return flatten_json(result["instrumentIdentity"])
 
 ################################################################################################
 #                                       GET INSTRUMENTS                                        #
@@ -157,17 +146,88 @@ def InstrumentAndShare(last_fetch_date=0, last_record_id=0):
     return instruments, share_increase
 
 
+recent_instruments, _ = InstrumentAndShare(0, 0)
+
+
+################################################################################################
+#                                           IDENTITY                                           #
+################################################################################################
+
+def get_identity(insCode):
+    
+        data_log.info(f'Going for Identity of "{insCode}"')
+        
+        result = requests.get(
+            config['URI']['IDENTITY'].format(insCode), headers=request_headers, cookies=cookie_jar
+        )
+        result.raise_for_status()  # raises exception when not a 2xx response
+        result = json.loads(result.text)
+        
+        data_log.info(f'Identity of "{insCode}" recieved correctly.')
+        
+        return flatten_json(result["instrumentIdentity"])
+
+
+def init_identities():
+    
+    all_tickers_except_indices = recent_instruments[recent_instruments['cComVal'] != '6'].index
+    
+    data_log.info('################### Getting Identities Started ###################')
+    
+    identities = pd.DataFrame({index:get_identity(index) for index in all_tickers_except_indices}).transpose()
+    identities.index.name = 'insCode'
+    
+    data_log.info('################### Getting Identities Finished ###################')
+    
+    # save to csv
+    identities.to_csv(str(db_path) + '/identities.csv')
+    
+    return identities
+
+
+def update_identities():
+    # اینبار تو یک دق و ۲۵ ثانیه تموم شد! و اینکه تا قبل از این ساعت یعنی ۸ و ۴۹ شب ارور میداد ک ریسپانس خالی میگرفت.
+    # شاید از ی ساعتی ببعد ترافیک سرور کم میشه و راحت میشه دیتا گرفت. بعدا چک کنم ک مطمئن بشم
+    # Update: without proxy (even with bypassing tsetmc.com) works better.
+    
+    identities_csv_file = str(db_path)+'/identities.csv'
+    if path.isfile(identities_csv_file):
+        
+        identities = pd.read_csv(identities_csv_file, index_col='insCode', dtype={'insCode':str})
+        new_instruments = set(recent_instruments.index) - set(identities.index)
+        
+        if new_instruments:
+            
+            data_log.info('New Instruments added. Getting Identity...')
+            
+            new_identities = pd.DataFrame({index:get_identity(index) for index in new_instruments}).transpose()
+            identities = pd.concat([identities,new_identities])
+            
+            # save to csv
+            identities.to_csv(str(db_path) + '/identities.csv')
+        
+        else:
+            print('No new Instruements added.')
+    else:
+        print('"identities.csv" file doesn\'t exists. re-downloading its data... aprox. 20 mins.')
+        
+        identities = init_identities()
+    
+    return identities
+
+
 ################################################################################################
 #                                 INSTRUMENT DAILY OHLCV + CSV                                 #
 ################################################################################################
 
-
+@calculate_MA
+@clean_data
 def get_daily_prices(insCodes:Union[str,list], force_download=False):
     
     if isinstance(insCodes,str):
         insCodes = [insCodes] 
     
-    if config.LAST_UPDATE < last_possible_deven():
+    if config['LAST_UPDATE']['INSTRUMENTS'] < last_possible_deven():
         force_download = True
     
     if force_download:
@@ -203,17 +263,18 @@ def get_daily_prices(insCodes:Union[str,list], force_download=False):
 #                                     LOAD PRICES FROM CSV                                     #
 ################################################################################################
 
-@calculate_MA(active=True)
+# @calculate_MA(active=True)
 def load_prices_csv(insCodes: list) -> dict: 
     try:        
         daily_prices = {insCode: pd.read_csv(
-                config.CSV_DATABASE_PATH + "/" + insCode + ".csv",
+                config['PATH']['CSV_DATABASE_PATH'] + "/" + insCode + ".csv",
                 dtype={
                     "<LOW>": "float32",
                     "<HIGH>": "float32",
                     "<OPEN>": "float32",
                     # "<VALUE>": "uint64",
                 },
+                index_col='<TICKER>'
             ) for insCode in insCodes}
     
     except (Exception) as e:
