@@ -12,7 +12,7 @@ from utils import (
     fa_to_ar_series,
     flatten_json,
 )
-from config import *
+import config
 from decorators import calculate_MA, clean_data
 import requests
 import json
@@ -146,6 +146,7 @@ def InstrumentAndShare(last_fetch_date=0, last_record_id=0):
     return instruments, share_increase
 
 
+last_date = last_possible_deven()
 recent_instruments, _ = InstrumentAndShare(0, 0)
 
 
@@ -158,7 +159,7 @@ def get_identity(insCode):
         data_log.info(f'Going for Identity of "{insCode}"')
         
         result = requests.get(
-            config['URI']['IDENTITY'].format(insCode), headers=request_headers, cookies=cookie_jar
+            config.item['URI']['IDENTITY'].format(insCode), headers=request_headers, cookies=cookie_jar
         )
         result.raise_for_status()  # raises exception when not a 2xx response
         result = json.loads(result.text)
@@ -172,15 +173,15 @@ def init_identities():
     
     all_tickers_except_indices = recent_instruments[recent_instruments['cComVal'] != '6'].index
     
-    data_log.info('################### Getting Identities Started ###################')
+    data_log.info('################### Initializing Identities Started ###################')
     
     identities = pd.DataFrame({index:get_identity(index) for index in all_tickers_except_indices}).transpose()
     identities.index.name = 'insCode'
     
-    data_log.info('################### Getting Identities Finished ###################')
+    data_log.info('################### Initializing Identities Finished ###################')
     
     # save to csv
-    identities.to_csv(str(db_path) + '/identities.csv')
+    identities.to_csv(str(config.db_path) + '/identities.csv')
     
     return identities
 
@@ -190,30 +191,44 @@ def update_identities():
     # شاید از ی ساعتی ببعد ترافیک سرور کم میشه و راحت میشه دیتا گرفت. بعدا چک کنم ک مطمئن بشم
     # Update: without proxy (even with bypassing tsetmc.com) works better.
     
-    identities_csv_file = str(db_path)+'/identities.csv'
+    identities_csv_file = str(config.db_path)+'/identities.csv'
+    
     if path.isfile(identities_csv_file):
         
+        all_tickers_except_indices = recent_instruments[recent_instruments['cComVal'] != '6'].index
+        
         identities = pd.read_csv(identities_csv_file, index_col='insCode', dtype={'insCode':str})
-        new_instruments = set(recent_instruments.index) - set(identities.index)
+        new_instruments = set(all_tickers_except_indices) - set(identities.index)
         
         if new_instruments:
             
             data_log.info('New Instruments added. Getting Identity...')
             
             new_identities = pd.DataFrame({index:get_identity(index) for index in new_instruments}).transpose()
-            identities = pd.concat([identities,new_identities])
+            identities = pd.concat([identities, new_identities])
             
             # save to csv
-            identities.to_csv(str(db_path) + '/identities.csv')
+            identities.to_csv(str(config.db_path) + '/identities.csv')
         
         else:
-            print('No new Instruements added.')
+            data_log.info('No new (Non-Index) Instruements added.')
     else:
         print('"identities.csv" file doesn\'t exists. re-downloading its data... aprox. 20 mins.')
         
         identities = init_identities()
     
+    config.item['LAST_UPDATE']['IDENTITY'] = last_date
+    config.save(config.item)
+    
     return identities
+
+
+def identities():
+    '''Wrapper for update_identities()'''
+    
+    return update_identities() \
+        if config.item['LAST_UPDATE']['IDENTITY'] <= last_date \
+            else print('Faulty Config!')
 
 
 ################################################################################################
@@ -227,12 +242,14 @@ def get_daily_prices(insCodes:Union[str,list], force_download=False):
     if isinstance(insCodes,str):
         insCodes = [insCodes] 
     
-    if config['LAST_UPDATE']['INSTRUMENTS'] < last_possible_deven():
+    if config.item['LAST_UPDATE']['DAILY_PRICES'] < last_possible_deven():
         force_download = True
     
     if force_download:
         
         daily_prices = {}
+        
+        data_log.info('################## Downloading Daily Prices Started ##################')
         
         for insCode in insCodes:
             resp = requests.get(
@@ -245,13 +262,18 @@ def get_daily_prices(insCodes:Union[str,list], force_download=False):
             df = pd.read_csv(data)
             df = df.set_index('<TICKER>')
             
-            df.to_csv(f'./tickers_data/{insCode}.csv')
+            df.to_csv(f'{config.tickers_data_path}/{insCode}.csv')
             
             data_log.info(f'Downloaded Daily Prices for: {insCode}')
             
             daily_prices[insCode] = df
             
             data_log.info(f'Daily Prices CSV Saved for: {insCode}')
+        
+        config.item['LAST_UPDATE']['DAILY_PRICES'] = last_date
+        config.save(config.item)
+        
+        data_log.info('################## Downloading Daily Prices Successeded ##################')
     
     else:
         daily_prices = load_prices_csv(insCodes=insCodes)
@@ -267,7 +289,7 @@ def get_daily_prices(insCodes:Union[str,list], force_download=False):
 def load_prices_csv(insCodes: list) -> dict: 
     try:        
         daily_prices = {insCode: pd.read_csv(
-                config['PATH']['CSV_DATABASE_PATH'] + "/" + insCode + ".csv",
+                config.db_path + "/" + insCode + ".csv",
                 dtype={
                     "<LOW>": "float32",
                     "<HIGH>": "float32",
@@ -279,5 +301,7 @@ def load_prices_csv(insCodes: list) -> dict:
     
     except (Exception) as e:
             print(f"Error: {e}")
+    
+    data_log.info('################## Daily Prices Loaded from Database ##################')
     
     return daily_prices

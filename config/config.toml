@@ -1,8 +1,11 @@
 [LAST_UPDATE]
 INSTRUMENTS = "20230905"
-IDENTITY = "20230905"
+IDENTITY = "20230909"
+DAILY_PRICES = "20230909"
+
 [PATH]
-TICKERS_DATA = "C:/Users/Ali/TSE-Helper/database/tickers_data"
-DATABASE = "C:/Users/Ali/TSE-Helper/database"
+TICKERS_DATA = "database/tickers_data"
+DATABASE = "database"
+
 [URI]
 IDENTITY = "http://cdn.tsetmc.com/api/Instrument/GetInstrumentIdentity/{}"

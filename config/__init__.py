@@ -11,7 +11,7 @@ tickers_data_path = (Path(__file__).parent.parent / 'database' / 'tickers_data')
 # make config private later and def its getter
 # def load():
 with config_path.open(mode='rb') as file:
-    config = tomli.load(file)
+    item = tomli.load(file)
 # return tomli.load(file)
 # maybe later: getting item off of cfg= cfg.get(key1, key2,...)
 
@@ -20,10 +20,11 @@ def save(conf:dict):
         tomli_w.dump(conf, file)
 
 
-default_config = {
+default_items = {
     'LAST_UPDATE': {
         'INSTRUMENTS': 0, 
-        'IDENTITY': 0, 
+        'IDENTITY': 0,
+        'DAILY_PRICES': 0,
         # ---------------------^-------------------
         'CAPITAL_INCREASE': 0,
         'INSTRUMENT_TYPES': datetime(2000, 1, 1).date()
@@ -53,6 +54,6 @@ default_config = {
     # }
 }
 
-if not config: 
-    config = default_config
-    save(config)
+if not item: 
+    item = default_items
+    save(item)
