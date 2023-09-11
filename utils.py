@@ -15,10 +15,10 @@ def setup_logger(log_file_path, formatter:logging.Formatter, name='__name__', le
     return logger
 
 formatter_app = logging.Formatter('%(asctime)s >> %(levelname)s >> %(filename)s >> %(lineno)d >> %(message)s')
-formatter_activity = logging.Formatter('%(asctime)s >> %(message)s')
+formatter_data = logging.Formatter('%(asctime)s >> %(message)s')
 
 # TSETMC Activity Logger
-data_log = setup_logger('data_io.log', formatter_activity, name='activity')
+data_log = setup_logger('data_io.log', formatter_data, name='activity')
 # App Debugging Logger
 debug_log = setup_logger('debug.log', formatter_app, name='app')
 

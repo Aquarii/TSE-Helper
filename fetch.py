@@ -26,10 +26,10 @@ request_headers = {
 cookie_jar = {"ASP.NET_SessionId": "wa40en1alwxzjnqehjntrv5j"}
 
 ################################################################################################
-#                                       LAST TRADING DAY                                       #
+#                                      TseClient 2.0 API                                       #
 ################################################################################################
 
-def last_possible_deven():
+def api_last_possible_deven():
     client = zeep.Client("http://service.tsetmc.com/WebService/TseClient.asmx?wsdl")
     last_workday = client.service.LastPossibleDeven()
     return (
@@ -38,11 +38,8 @@ def last_possible_deven():
         else print(last_workday)
     )  # for debuging purposes
 
-################################################################################################
-#                                       GET INSTRUMENTS                                        #
-################################################################################################
 
-def instruments(last_fetch):
+def api_instruments(last_fetch):
     '''
     last_fetch:\n\tDate after which Traded Instruments are needed.
     '''
@@ -84,11 +81,7 @@ def instruments(last_fetch):
         print('No Response from Endpoint: Instrument')
 
 
-################################################################################################
-#                                  GET INSTRUMENTS AND SHARES                                  #
-################################################################################################
-
-def InstrumentAndShare(last_fetch_date=0, last_record_id=0):
+def api_instrument_and_share(last_fetch_date=0, last_record_id=0):
     client = zeep.Client(
         wsdl="http://service.tsetmc.com/WebService/TseClient.asmx?wsdl"
     )
@@ -146,8 +139,39 @@ def InstrumentAndShare(last_fetch_date=0, last_record_id=0):
     return instruments, share_increase
 
 
-last_date = last_possible_deven()
-recent_instruments, _ = InstrumentAndShare(0, 0)
+_last_date = api_last_possible_deven()
+_recent_instruments, _ = api_instrument_and_share(0, 0)
+
+
+################################################################################################
+#                                           INSTRUMENTS                                        #
+################################################################################################
+
+def get_instruments():
+    
+    instruments_csv_file = str(config.db_path)+'/instruments.csv'
+    
+    if path.isfile(instruments_csv_file):
+        
+        instruments = pd.read_csv(instruments_csv_file, index_col='insCode', dtype={'insCode':str})
+
+    else:
+        print('"instruments.csv" file doesn\'t exists. re-downloading...')
+        
+        instruments = _recent_instruments
+    
+    config.item['LAST_UPDATE']['INSTRUMENTS'] = _last_date
+    config.save(config.item)
+    
+    return instruments
+
+
+def instruments():
+    '''Date Checker Wrapper for get_instruments()'''
+    
+    return get_instruments() \
+        if config.item['LAST_UPDATE']['INSTRUMENTS'] <= _last_date \
+            else print('Faulty Config!')
 
 
 ################################################################################################
@@ -171,7 +195,7 @@ def get_identity(insCode):
 
 def init_identities():
     
-    all_tickers_except_indices = recent_instruments[recent_instruments['cComVal'] != '6'].index
+    all_tickers_except_indices = _recent_instruments[_recent_instruments['cComVal'] != '6'].index
     
     data_log.info('################### Initializing Identities Started ###################')
     
@@ -195,7 +219,7 @@ def update_identities():
     
     if path.isfile(identities_csv_file):
         
-        all_tickers_except_indices = recent_instruments[recent_instruments['cComVal'] != '6'].index
+        all_tickers_except_indices = _recent_instruments[_recent_instruments['cComVal'] != '6'].index
         
         identities = pd.read_csv(identities_csv_file, index_col='insCode', dtype={'insCode':str})
         new_instruments = set(all_tickers_except_indices) - set(identities.index)
@@ -211,23 +235,23 @@ def update_identities():
             identities.to_csv(str(config.db_path) + '/identities.csv')
         
         else:
-            data_log.info('No new (Non-Index) Instruements added.')
+            data_log.info('No New (Non-Index) Instruements.')
     else:
         print('"identities.csv" file doesn\'t exists. re-downloading its data... aprox. 20 mins.')
         
         identities = init_identities()
     
-    config.item['LAST_UPDATE']['IDENTITY'] = last_date
+    config.item['LAST_UPDATE']['IDENTITY'] = _last_date
     config.save(config.item)
     
     return identities
 
 
 def identities():
-    '''Wrapper for update_identities()'''
+    '''Date Checker Wrapper for update_identities()'''
     
     return update_identities() \
-        if config.item['LAST_UPDATE']['IDENTITY'] <= last_date \
+        if config.item['LAST_UPDATE']['IDENTITY'] <= _last_date \
             else print('Faulty Config!')
 
 
@@ -236,22 +260,25 @@ def identities():
 ################################################################################################
 
 @calculate_MA
-@clean_data
+@clean_data(remove_days_with_no_trades=True)
 def get_daily_prices(insCodes:Union[str,list], force_download=False):
     
     if isinstance(insCodes,str):
         insCodes = [insCodes] 
     
-    if config.item['LAST_UPDATE']['DAILY_PRICES'] < last_possible_deven():
+    if config.item['LAST_UPDATE']['DAILY_PRICES'] < api_last_possible_deven():
         force_download = True
     
     if force_download:
         
         daily_prices = {}
         
-        data_log.info('################## Downloading Daily Prices Started ##################')
+        data_log.info('################## Daily Prices: Download Started ##################')
         
         for insCode in insCodes:
+            
+            data_log.info(f'Take a Shot at insCode: {insCode}')
+            
             resp = requests.get(
                 url=f"http://cdn.tsetmc.com/api/ClosingPrice/GetClosingPriceDailyListCSV/{insCode}/{insCode}",
                 headers=request_headers,
@@ -260,20 +287,16 @@ def get_daily_prices(insCodes:Union[str,list], force_download=False):
             
             data = StringIO(resp.text)
             df = pd.read_csv(data)
-            df = df.set_index('<TICKER>')
-            
             df.to_csv(f'{config.tickers_data_path}/{insCode}.csv')
             
-            data_log.info(f'Downloaded Daily Prices for: {insCode}')
+            data_log.info(f'Daily Prices of {insCode} Downloaded and Saved as CSV.')
             
             daily_prices[insCode] = df
-            
-            data_log.info(f'Daily Prices CSV Saved for: {insCode}')
         
-        config.item['LAST_UPDATE']['DAILY_PRICES'] = last_date
+        config.item['LAST_UPDATE']['DAILY_PRICES'] = _last_date
         config.save(config.item)
         
-        data_log.info('################## Downloading Daily Prices Successeded ##################')
+        data_log.info('################## Daily Prices: Download Successeded ##################')
     
     else:
         daily_prices = load_prices_csv(insCodes=insCodes)
@@ -285,19 +308,17 @@ def get_daily_prices(insCodes:Union[str,list], force_download=False):
 #                                     LOAD PRICES FROM CSV                                     #
 ################################################################################################
 
-# @calculate_MA(active=True)
 def load_prices_csv(insCodes: list) -> dict: 
     try:        
         daily_prices = {insCode: pd.read_csv(
-                config.db_path + "/" + insCode + ".csv",
-                dtype={
-                    "<LOW>": "float32",
-                    "<HIGH>": "float32",
-                    "<OPEN>": "float32",
-                    # "<VALUE>": "uint64",
-                },
-                index_col='<TICKER>'
-            ) for insCode in insCodes}
+            f'{config.tickers_data_path}/{insCode}.csv',
+            dtype={
+                "<LOW>": "float32",
+                "<HIGH>": "float32",
+                "<OPEN>": "float32",
+                # "<VALUE>": "uint64",
+            }
+        ) for insCode in insCodes}
     
     except (Exception) as e:
             print(f"Error: {e}")
