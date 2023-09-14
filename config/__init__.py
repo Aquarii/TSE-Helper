@@ -19,6 +19,7 @@ def save(conf:dict):
     with config_path.open(mode='wb') as file:
         tomli_w.dump(conf, file)
 
+#! make a config.toml checker function: checks if all last_updates aren't more than _last_date
 
 default_items = {
     'LAST_UPDATE': {

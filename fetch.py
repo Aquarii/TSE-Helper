@@ -1,6 +1,7 @@
 from typing import Union
 from io import StringIO
 from glob import glob
+import os.path, time
 from os import path
 import zeep
 from utils import (
@@ -140,7 +141,7 @@ def api_instrument_and_share(last_fetch_date=0, last_record_id=0):
 
 
 _last_date = api_last_possible_deven()
-_recent_instruments, _ = api_instrument_and_share(0, 0)
+_recent_instruments_df, _ = api_instrument_and_share(0, 0)
 
 
 ################################################################################################
@@ -158,7 +159,7 @@ def get_instruments():
     else:
         print('"instruments.csv" file doesn\'t exists. re-downloading...')
         
-        instruments = _recent_instruments
+        instruments = _recent_instruments_df
     
     config.item['LAST_UPDATE']['INSTRUMENTS'] = _last_date
     config.save(config.item)
@@ -179,32 +180,32 @@ def instruments():
 ################################################################################################
 
 def get_identity(insCode):
-    
-        data_log.info(f'Going for Identity of "{insCode}"')
-        
-        result = requests.get(
-            config.item['URI']['IDENTITY'].format(insCode), headers=request_headers, cookies=cookie_jar
-        )
-        result.raise_for_status()  # raises exception when not a 2xx response
-        result = json.loads(result.text)
-        
-        data_log.info(f'Identity of "{insCode}" recieved correctly.')
-        
-        return flatten_json(result["instrumentIdentity"])
+    #region#  <<<<<< LOG >>>>>>
+    data_log.info(f'Going for Identity of "{insCode}"')
+    #endregion#
+    result = requests.get(
+        config.item['URI']['IDENTITY'].format(insCode), headers=request_headers, cookies=cookie_jar
+    )
+    result.raise_for_status()  # raises exception when not a 2xx response
+    result = json.loads(result.text)
+    #region#  <<<<<< LOG >>>>>>
+    data_log.info(f'Identity of "{insCode}" recieved correctly.')
+    #endregion#
+    return flatten_json(result["instrumentIdentity"])
 
 
 def init_identities():
     
-    all_tickers_except_indices = _recent_instruments[_recent_instruments['cComVal'] != '6'].index
-    
+    all_tickers_except_indices = _recent_instruments_df[_recent_instruments_df['cComVal'] != '6'].index
+    #region#  <<<<<< LOG >>>>>>
     data_log.info('################### Initializing Identities Started ###################')
-    
+    #endregion#
     identities = pd.DataFrame({index:get_identity(index) for index in all_tickers_except_indices}).transpose()
     identities.index.name = 'insCode'
-    
+    #region#  <<<<<< LOG >>>>>>
     data_log.info('################### Initializing Identities Finished ###################')
-    
-    # save to csv
+    #endregion#
+    # Save to CSV
     identities.to_csv(str(config.db_path) + '/identities.csv')
     
     return identities
@@ -219,15 +220,15 @@ def update_identities():
     
     if path.isfile(identities_csv_file):
         
-        all_tickers_except_indices = _recent_instruments[_recent_instruments['cComVal'] != '6'].index
+        all_tickers_except_indices = _recent_instruments_df[_recent_instruments_df['cComVal'] != '6'].index
         
         identities = pd.read_csv(identities_csv_file, index_col='insCode', dtype={'insCode':str})
         new_instruments = set(all_tickers_except_indices) - set(identities.index)
         
         if new_instruments:
-            
+            #region#  <<<<<< LOG >>>>>>
             data_log.info('New Instruments added. Getting Identity...')
-            
+            #endregion#
             new_identities = pd.DataFrame({index:get_identity(index) for index in new_instruments}).transpose()
             identities = pd.concat([identities, new_identities])
             
@@ -235,7 +236,9 @@ def update_identities():
             identities.to_csv(str(config.db_path) + '/identities.csv')
         
         else:
+            #region#  <<<<<< LOG >>>>>>
             data_log.info('No New (Non-Index) Instruements.')
+            #endregion#
     else:
         print('"identities.csv" file doesn\'t exists. re-downloading its data... aprox. 20 mins.')
         
@@ -250,35 +253,53 @@ def update_identities():
 def identities():
     '''Date Checker Wrapper for update_identities()'''
     
-    return update_identities() \
-        if config.item['LAST_UPDATE']['IDENTITY'] <= _last_date \
-            else print('Faulty Config!')
+    if config.item['LAST_UPDATE']['IDENTITY'] < _last_date:
+        return update_identities()
 
 
-################################################################################################
-#                                 INSTRUMENT DAILY OHLCV + CSV                                 #
-################################################################################################
+#################################################################################################
+##                                INSTRUMENT PRICES OHLCV + CSV                                ##
+#################################################################################################
 
-@calculate_MA
-@clean_data(remove_days_with_no_trades=True)
-def get_daily_prices(insCodes:Union[str,list], force_download=False):
+def load_quotes(insCodes:Union[str,list], force_download=False): #? timeframe param "all"|"daily"|"2m"|"30m"
     
     if isinstance(insCodes,str):
         insCodes = [insCodes] 
     
     if config.item['LAST_UPDATE']['DAILY_PRICES'] < api_last_possible_deven():
+        print('Database is Outdated. Updating... Please Wait...')
         force_download = True
     
     if force_download:
-        
-        daily_prices = {}
-        
+        #region#  <<<<<< LOG >>>>>>
         data_log.info('################## Daily Prices: Download Started ##################')
+        #endregion#
+        download_daily_timeframe_to_csv()
         
-        for insCode in insCodes:
-            
-            data_log.info(f'Take a Shot at insCode: {insCode}')
-            
+        config.item['LAST_UPDATE']['DAILY_PRICES'] = _last_date
+        config.save(config.item)
+        #region#  <<<<<< LOG >>>>>>
+        data_log.info('################## Daily Prices: Download Successeded ##################')
+        #endregion#
+    
+    return load_prices_csv(insCodes)
+
+
+def download_daily_timeframe_to_csv():
+    
+    for insCode in _recent_instruments_df.index:
+        #region#  <<<<<< LOG >>>>>>
+        data_log.info(f'Take a Shot at insCode: {insCode}')
+        #endregion#
+        csv_file = f'./database/tickers_data/{insCode}.csv'
+        instrument_last_update_date = time.strftime('%Y%m%d', time.localtime(os.path.getmtime(csv_file)))
+        
+        # if the instrument is up-to-date skip it
+        if path.isfile(csv_file) and instrument_last_update_date == _last_date:
+            continue
+        
+        # if instrument is new or is out-of-date, update it.
+        else:
             resp = requests.get(
                 url=f"http://cdn.tsetmc.com/api/ClosingPrice/GetClosingPriceDailyListCSV/{insCode}/{insCode}",
                 headers=request_headers,
@@ -288,26 +309,17 @@ def get_daily_prices(insCodes:Union[str,list], force_download=False):
             data = StringIO(resp.text)
             df = pd.read_csv(data)
             df.to_csv(f'{config.tickers_data_path}/{insCode}.csv')
-            
+            #region#  <<<<<< LOG >>>>>>
             data_log.info(f'Daily Prices of {insCode} Downloaded and Saved as CSV.')
-            
-            daily_prices[insCode] = df
-        
-        config.item['LAST_UPDATE']['DAILY_PRICES'] = _last_date
-        config.save(config.item)
-        
-        data_log.info('################## Daily Prices: Download Successeded ##################')
-    
-    else:
-        daily_prices = load_prices_csv(insCodes=insCodes)
-
-    return daily_prices
+            #endregion#
 
 
 ################################################################################################
 #                                     LOAD PRICES FROM CSV                                     #
 ################################################################################################
 
+@calculate_MA
+@clean_data(remove_days_with_no_trades=True)
 def load_prices_csv(insCodes: list) -> dict: 
     try:        
         daily_prices = {insCode: pd.read_csv(
@@ -322,7 +334,8 @@ def load_prices_csv(insCodes: list) -> dict:
     
     except (Exception) as e:
             print(f"Error: {e}")
-    
+    #region#  <<<<<< LOG >>>>>>
     data_log.info('################## Daily Prices Loaded from Database ##################')
-    
+    #endregion#
     return daily_prices
+

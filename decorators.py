@@ -53,7 +53,7 @@ def clean_data(remove_days_with_no_trades=True):
                         
                         prices[insCode] = prices[insCode][prices[insCode]['<OPENINT>'] != 0]
                 
-                if not len(prices[insCode].index):
+                if not len(prices[insCode].index): # can be achieved using pd.read_csv (na_values & keep_default_na)
                     
                     del prices[insCode]
             
