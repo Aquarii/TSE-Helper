@@ -50,9 +50,7 @@ def api_instruments(last_fetch):
     
     instruments = client.service.Instrument(last_fetch)
     if instruments:
-        instruments = pd.DataFrame(
-            instrument.split(',') for instrument in instruments.split(';'))
-        instruments.columns = [
+        columns = [
             "insCode",
             "instrumentID",
             "cValMne",
@@ -64,14 +62,18 @@ def api_instruments(last_fetch):
             "lastDate",
             "flow",
             "lSoc30",
-            "status_code",
-            "group_code",
-            "market_type_code",
+            "CGdSVal",
+            "cgrValCot",
+            "yMarNSC",
             "cComVal",
             "cSecVal",
             "cSoSecVal",
             "yVal",
         ]
+        instruments = pd.DataFrame(
+            [instrument.split(',') for instrument in instruments.split(';')],# checkpoint,
+            columns=columns
+        )
         instruments.set_index("insCode", inplace=True)
         instruments["lVal18AFC"] = ar_to_fa_series(instruments["lVal18AFC"])
         instruments["lVal30"] = ar_to_fa_series(instruments["lVal30"])
@@ -86,17 +88,13 @@ def api_instrument_and_share(last_fetch_date=0, last_record_id=0):
     client = zeep.Client(
         wsdl="http://service.tsetmc.com/WebService/TseClient.asmx?wsdl"
     )
-
+    
     instruments, share_increase = client.service.InstrumentAndShare(
         last_fetch_date, last_record_id
     ).split("@")
-
+    
     if instruments:
-        instruments = instruments.split(";")
-        instruments = pd.DataFrame(
-            [instrument.split(",") for instrument in instruments]
-        )
-        instruments.columns = [
+        columns = [
             "insCode",
             "instrumentID",
             "cValMne",
@@ -108,20 +106,24 @@ def api_instrument_and_share(last_fetch_date=0, last_record_id=0):
             "lastDate",
             "flow",
             "lSoc30",
-            "status_code",
-            "group_code",
-            "market_type_code",
+            "CGdSVal",
+            "cgrValCot",
+            "yMarNSC",
             "cComVal",
             "cSecVal",
             "cSoSecVal",
             "yVal",
         ]
+        instruments = pd.DataFrame(
+            [instrument.split(",") for instrument in instruments.split(";")],
+            columns=columns
+        )
         instruments.set_index("insCode", inplace=True)
         instruments["lVal18AFC"] = ar_to_fa_series(instruments["lVal18AFC"])
         instruments["lVal30"] = ar_to_fa_series(instruments["lVal30"])
         instruments["lSoc30"] = ar_to_fa_series(instruments["lSoc30"])
         instruments["cSecVal"] = instruments["cSecVal"].str.strip()
-
+        
     if share_increase:
         share_increase = share_increase.split(";")
         share_increase = pd.DataFrame([share.split(",") for share in share_increase])
@@ -136,7 +138,7 @@ def api_instrument_and_share(last_fetch_date=0, last_record_id=0):
         share_increase.set_index("record_id", inplace=True)
     else:
         share_increase = None
-
+        
     return instruments, share_increase
 
 
@@ -150,36 +152,33 @@ _recent_instruments_df, _ = api_instrument_and_share(0, 0)
 
 def get_instruments():
     
-    instruments_csv_file = str(config.db_path)+'/instruments.csv'
+    instruments_csv_path = str(config.db_path)+'/instruments.csv'
     
-    if path.isfile(instruments_csv_file):
+    if config.item['LAST_UPDATE']['INSTRUMENTS'] == _last_date and path.isfile(instruments_csv_path):
+        instruments = pd.read_csv(
+            instruments_csv_path, index_col='insCode', 
+            dtype={
+                'insCode':str, 
+                'cComVal':str
+                }
+        )
         
-        instruments = pd.read_csv(instruments_csv_file, index_col='insCode', dtype={'insCode':str})
-
     else:
-        print('"instruments.csv" file doesn\'t exists. re-downloading...')
-        
         instruments = _recent_instruments_df
-    
-    config.item['LAST_UPDATE']['INSTRUMENTS'] = _last_date
+        instruments.to_csv(f'{instruments_csv_path}/instruments.csv')
+        
+        config.item['LAST_UPDATE']['INSTRUMENTS'] = _last_date
+        
     config.save(config.item)
     
     return instruments
-
-
-def instruments():
-    '''Date Checker Wrapper for get_instruments()'''
-    
-    return get_instruments() \
-        if config.item['LAST_UPDATE']['INSTRUMENTS'] <= _last_date \
-            else print('Faulty Config!')
 
 
 ################################################################################################
 #                                           IDENTITY                                           #
 ################################################################################################
 
-def get_identity(insCode):
+def get_identity(insCode:str) -> dict:
     #region#  <<<<<< LOG >>>>>>
     data_log.info(f'Going for Identity of "{insCode}"')
     #endregion#
@@ -194,13 +193,13 @@ def get_identity(insCode):
     return flatten_json(result["instrumentIdentity"])
 
 
-def init_identities():
+def init_identities() -> pd.DataFrame:
     
     all_tickers_except_indices = _recent_instruments_df[_recent_instruments_df['cComVal'] != '6'].index
     #region#  <<<<<< LOG >>>>>>
     data_log.info('################### Initializing Identities Started ###################')
     #endregion#
-    identities = pd.DataFrame({index:get_identity(index) for index in all_tickers_except_indices}).transpose()
+    identities = pd.DataFrame({insCode:get_identity(insCode) for insCode in all_tickers_except_indices}).transpose()
     identities.index.name = 'insCode'
     #region#  <<<<<< LOG >>>>>>
     data_log.info('################### Initializing Identities Finished ###################')
@@ -211,25 +210,37 @@ def init_identities():
     return identities
 
 
-def update_identities():
+def get_identities() -> pd.DataFrame:
     # اینبار تو یک دق و ۲۵ ثانیه تموم شد! و اینکه تا قبل از این ساعت یعنی ۸ و ۴۹ شب ارور میداد ک ریسپانس خالی میگرفت.
     # شاید از ی ساعتی ببعد ترافیک سرور کم میشه و راحت میشه دیتا گرفت. بعدا چک کنم ک مطمئن بشم
-    # Update: without proxy (even with bypassing tsetmc.com) works better.
+    # Update: without proxy works better. (not even bypassing tsetmc.com in proxy app works. it should be off it seems)
     
-    identities_csv_file = str(config.db_path)+'/identities.csv'
+    identities_csv_path = str(config.db_path)+'/identities.csv'
     
-    if path.isfile(identities_csv_file):
+    if path.isfile(identities_csv_path):
+        identities = pd.read_csv(
+            identities_csv_path, index_col='insCode', 
+            dtype={
+                'insCode': str, 
+                'sector_cSecVal': str,
+                'subSector_cSoSecVal': str,
+                'yVal': str,
+                'flow': str,
+                'cComVal': str,
+                }
+            )
         
         all_tickers_except_indices = _recent_instruments_df[_recent_instruments_df['cComVal'] != '6'].index
-        
-        identities = pd.read_csv(identities_csv_file, index_col='insCode', dtype={'insCode':str})
         new_instruments = set(all_tickers_except_indices) - set(identities.index)
         
         if new_instruments:
             #region#  <<<<<< LOG >>>>>>
             data_log.info('New Instruments added. Getting Identity...')
             #endregion#
-            new_identities = pd.DataFrame({index:get_identity(index) for index in new_instruments}).transpose()
+            new_identities = pd.DataFrame(
+                {insCode:get_identity(insCode) for insCode in new_instruments}
+            ).transpose()
+            new_identities.index.name = 'insCode'
             identities = pd.concat([identities, new_identities])
             
             # save to csv
@@ -239,29 +250,22 @@ def update_identities():
             #region#  <<<<<< LOG >>>>>>
             data_log.info('No New (Non-Index) Instruements.')
             #endregion#
+        
+        config.item['LAST_UPDATE']['IDENTITY'] = _last_date # Obsolete! Effective date is last_update_instruments. will keep it for now.
+        config.save(config.item)
+        
+        return identities
+    
     else:
         print('"identities.csv" file doesn\'t exists. re-downloading its data... aprox. 20 mins.')
-        
-        identities = init_identities()
-    
-    config.item['LAST_UPDATE']['IDENTITY'] = _last_date
-    config.save(config.item)
-    
-    return identities
-
-
-def identities():
-    '''Date Checker Wrapper for update_identities()'''
-    
-    if config.item['LAST_UPDATE']['IDENTITY'] < _last_date:
-        return update_identities()
+        return init_identities()
 
 
 #################################################################################################
 ##                                INSTRUMENT PRICES OHLCV + CSV                                ##
 #################################################################################################
 
-def load_quotes(insCodes:Union[str,list], force_download=False): #? timeframe param "all"|"daily"|"2m"|"30m"
+def get_quotes(insCodes:Union[str,list], force_download=False): #? timeframe param "all"|"daily"|"2m"|"30m"
     
     if isinstance(insCodes,str):
         insCodes = [insCodes] 
@@ -294,11 +298,11 @@ def download_daily_timeframe_to_csv():
         csv_file = f'./database/tickers_data/{insCode}.csv'
         instrument_last_update_date = time.strftime('%Y%m%d', time.localtime(os.path.getmtime(csv_file)))
         
-        # if the instrument is up-to-date skip it
+        # skip instrument if it's up-to-date
         if path.isfile(csv_file) and instrument_last_update_date == _last_date:
             continue
         
-        # if instrument is new or is out-of-date, update it.
+        # update instrument if it's new or out-of-date
         else:
             resp = requests.get(
                 url=f"http://cdn.tsetmc.com/api/ClosingPrice/GetClosingPriceDailyListCSV/{insCode}/{insCode}",
