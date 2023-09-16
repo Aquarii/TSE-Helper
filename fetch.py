@@ -1,4 +1,4 @@
-from typing import Union
+from typing import Iterable
 from io import StringIO
 from glob import glob
 import os.path, time
@@ -152,26 +152,51 @@ _recent_instruments_df, _ = api_instrument_and_share(0, 0)
 
 def get_instruments():
     
-    instruments_csv_path = str(config.db_path)+'/instruments.csv'
+    # instruments_csv_path = str(config.db_path)+'/instruments.csv'
     
-    if config.item['LAST_UPDATE']['INSTRUMENTS'] == _last_date and path.isfile(instruments_csv_path):
-        instruments = pd.read_csv(
-            instruments_csv_path, index_col='insCode', 
-            dtype={
-                'insCode':str, 
-                'cComVal':str
-                }
-        )
+    # if config.item['LAST_UPDATE']['INSTRUMENTS'] == _last_date and path.isfile(instruments_csv_path):
+    #     instruments = pd.read_csv(
+    #         instruments_csv_path, index_col='insCode', 
+    #         dtype={
+    #             'insCode':str, 
+    #             'cComVal':str
+    #             }
+    #     )
         
-    else:
-        instruments = _recent_instruments_df
-        instruments.to_csv(f'{instruments_csv_path}/instruments.csv')
-        
-        config.item['LAST_UPDATE']['INSTRUMENTS'] = _last_date
-        
+    # else:
+    instruments = _recent_instruments_df
+    instruments.to_csv(str(config.db_path)+'/instruments.csv', quoting=1)
+    
+    config.item['LAST_UPDATE']['INSTRUMENTS'] = _last_date
     config.save(config.item)
     
     return instruments
+
+
+def get_last_update_dates():
+    
+    last_updates_csv_path = str(config.db_path)+'/last_updates.csv'
+    
+    if not path.isfile(last_updates_csv_path):
+        
+        last_updates_df = pd.DataFrame()
+        last_updates_df.index = _recent_instruments_df.index
+        last_updates_df['lastDEven'] = _recent_instruments_df['lastDate']
+        last_updates_df['daily'] = 0
+        last_updates_df.to_csv(last_updates_csv_path, index=True, quoting=1)
+        
+    else:
+        
+        last_updates_df = pd.read_csv(
+            last_updates_csv_path, 
+            index_col='insCode', 
+            dtype={
+                'insCode':str, 
+                'lastDate':str
+            }
+        )
+        
+    return last_updates_df
 
 
 ################################################################################################
@@ -215,7 +240,7 @@ def init_identities() -> pd.DataFrame:
     #endregion#
     
     # Save to CSV
-    identities.to_csv(str(config.db_path) + '/identities.csv', quoting=1)
+    identities.to_csv(str(config.db_path) + '/identities.csv', quoting=1) #make it 5 after update to python 3.12 
     
     return identities
 
@@ -255,7 +280,7 @@ def get_identities() -> pd.DataFrame:
             identities = pd.concat([identities, new_identities])
             
             # save to csv
-            identities.to_csv(str(config.db_path) + '/identities.csv', quoting=1)
+            identities.to_csv(str(config.db_path) + '/identities.csv', quoting=1) #make it 5 after update to python 3.12 
         
         else:
             #region#  <<<<<< LOG >>>>>>
@@ -276,12 +301,12 @@ def get_identities() -> pd.DataFrame:
 ##                                INSTRUMENT PRICES OHLCV + CSV                                ##
 #################################################################################################
 
-def get_quotes(insCodes:Union[str,list], force_download=False): #? timeframe param "all"|"daily"|"2m"|"30m"
+def get_quotes(insCodes:str|Iterable, force_download=False): #? timeframe param "all"|"daily"|"2m"|"30m"
     
     if isinstance(insCodes,str):
         insCodes = [insCodes] 
     
-    if config.item['LAST_UPDATE']['DAILY_PRICES'] < api_last_possible_deven():
+    if config.item['LAST_UPDATE']['DAILY_QUOTES'] < _last_date:
         print('Database is Outdated. Updating... Please Wait...')
         force_download = True
     
@@ -290,9 +315,12 @@ def get_quotes(insCodes:Union[str,list], force_download=False): #? timeframe par
         data_log.info('################## Daily Prices: Download Started ##################')
         #endregion#
         
-        download_daily_timeframe_to_csv()
+        if insCodes == ['all']:
+            insCodes = _recent_instruments_df.index
         
-        config.item['LAST_UPDATE']['DAILY_PRICES'] = _last_date
+        download_daily_timeframe_to_csv(insCodes, force_download)
+        
+        config.item['LAST_UPDATE']['DAILY_QUOTES'] = _last_date
         config.save(config.item)
         
         #region#  <<<<<< LOG >>>>>>
@@ -302,21 +330,25 @@ def get_quotes(insCodes:Union[str,list], force_download=False): #? timeframe par
     return load_prices_csv(insCodes)
 
 
-def download_daily_timeframe_to_csv():
+def download_daily_timeframe_to_csv(insCodes: Iterable[str], force_download= False) -> None:
     
-    for insCode in _recent_instruments_df.index:
+    
+    for insCode in insCodes:
         
-        csv_file = f'./database/tickers_data/{insCode}.csv'
-        instrument_last_update_date = time.strftime('%Y%m%d', time.localtime(os.path.getmtime(csv_file)))
+        last_updates_df = get_last_update_dates()
         
         # skip instrument if it's up-to-date
-        if path.isfile(csv_file) and instrument_last_update_date == _last_date:
+        if (
+            not force_download and
+            path.isfile(f'{config.tickers_data_path}/{insCode}.csv') and
+            last_updates_df.at[insCode,'daily'] == _last_date
+        ):
             continue
         
         # update instrument if it's new or out-of-date
         else:
             #region#  <<<<<< LOG >>>>>>
-            data_log.info(f'Take a Shot at insCode: {insCode}')
+            data_log.info(f'Take a Shot at Daily Quotes of: {insCode}')
             #endregion#
             
             resp = requests.get(
@@ -325,9 +357,11 @@ def download_daily_timeframe_to_csv():
                 cookies=cookie_jar)
             resp.raise_for_status()
             
-            data = StringIO(resp.text)
-            df = pd.read_csv(data)
-            df.to_csv(f'{config.tickers_data_path}/{insCode}.csv')
+            with open(f'{config.tickers_data_path}/{insCode}.csv', 'wb') as file:
+                file.write(resp.content)
+            
+            last_updates_df.at[insCode,'daily'] = _last_date
+            last_updates_df.to_csv(f'{config.db_path}/last_updates.csv')
             
             #region#  <<<<<< LOG >>>>>>
             data_log.info(f'Daily Prices of {insCode} Downloaded and Saved as CSV.')
