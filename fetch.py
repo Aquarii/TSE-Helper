@@ -207,7 +207,7 @@ def init_identities() -> pd.DataFrame:
     identities = pd.DataFrame(
         {insCode:get_identity(insCode) for insCode in all_tickers_except_indices}
     ).transpose()
-    identities = identities['sector_cSecVal'].str.strip()
+    identities['sector_cSecVal'] = identities['sector_cSecVal'].str.strip()
     identities.index.name = 'insCode'
     
     #region#  <<<<<< LOG >>>>>>
@@ -215,7 +215,7 @@ def init_identities() -> pd.DataFrame:
     #endregion#
     
     # Save to CSV
-    identities.to_csv(str(config.db_path) + '/identities.csv')
+    identities.to_csv(str(config.db_path) + '/identities.csv', quoting=1)
     
     return identities
 
@@ -249,13 +249,13 @@ def get_identities() -> pd.DataFrame:
             new_identities = pd.DataFrame(
                 {insCode:get_identity(insCode) for insCode in new_instruments}
             ).transpose()
-            new_identities = new_identities['sector_cSecVal'].str.strip()
+            new_identities['sector_cSecVal'] = new_identities['sector_cSecVal'].str.strip()
             new_identities.index.name = 'insCode'
             
             identities = pd.concat([identities, new_identities])
             
             # save to csv
-            identities.to_csv(str(config.db_path) + '/identities.csv')
+            identities.to_csv(str(config.db_path) + '/identities.csv', quoting=1)
         
         else:
             #region#  <<<<<< LOG >>>>>>
