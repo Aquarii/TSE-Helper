@@ -179,31 +179,41 @@ def get_instruments():
 ################################################################################################
 
 def get_identity(insCode:str) -> dict:
+    
     #region#  <<<<<< LOG >>>>>>
     data_log.info(f'Going for Identity of "{insCode}"')
     #endregion#
+    
     result = requests.get(
         config.item['URI']['IDENTITY'].format(insCode), headers=request_headers, cookies=cookie_jar
     )
     result.raise_for_status()  # raises exception when not a 2xx response
     result = json.loads(result.text)
+    
     #region#  <<<<<< LOG >>>>>>
     data_log.info(f'Identity of "{insCode}" recieved correctly.')
     #endregion#
+    
     return flatten_json(result["instrumentIdentity"])
 
 
 def init_identities() -> pd.DataFrame:
     
-    all_tickers_except_indices = _recent_instruments_df[_recent_instruments_df['cComVal'] != '6'].index
     #region#  <<<<<< LOG >>>>>>
     data_log.info('################### Initializing Identities Started ###################')
     #endregion#
-    identities = pd.DataFrame({insCode:get_identity(insCode) for insCode in all_tickers_except_indices}).transpose()
+    
+    all_tickers_except_indices = _recent_instruments_df[_recent_instruments_df['cComVal'] != '6'].index
+    identities = pd.DataFrame(
+        {insCode:get_identity(insCode) for insCode in all_tickers_except_indices}
+    ).transpose()
+    identities = identities['sector_cSecVal'].str.strip()
     identities.index.name = 'insCode'
+    
     #region#  <<<<<< LOG >>>>>>
     data_log.info('################### Initializing Identities Finished ###################')
     #endregion#
+    
     # Save to CSV
     identities.to_csv(str(config.db_path) + '/identities.csv')
     
@@ -211,15 +221,13 @@ def init_identities() -> pd.DataFrame:
 
 
 def get_identities() -> pd.DataFrame:
-    # اینبار تو یک دق و ۲۵ ثانیه تموم شد! و اینکه تا قبل از این ساعت یعنی ۸ و ۴۹ شب ارور میداد ک ریسپانس خالی میگرفت.
-    # شاید از ی ساعتی ببعد ترافیک سرور کم میشه و راحت میشه دیتا گرفت. بعدا چک کنم ک مطمئن بشم
-    # Update: without proxy works better. (not even bypassing tsetmc.com in proxy app works. it should be off it seems)
     
     identities_csv_path = str(config.db_path)+'/identities.csv'
     
     if path.isfile(identities_csv_path):
         identities = pd.read_csv(
-            identities_csv_path, index_col='insCode', 
+            identities_csv_path, 
+            index_col='insCode', 
             dtype={
                 'insCode': str, 
                 'sector_cSecVal': str,
@@ -237,10 +245,13 @@ def get_identities() -> pd.DataFrame:
             #region#  <<<<<< LOG >>>>>>
             data_log.info('New Instruments added. Getting Identity...')
             #endregion#
+            
             new_identities = pd.DataFrame(
                 {insCode:get_identity(insCode) for insCode in new_instruments}
             ).transpose()
+            new_identities = new_identities['sector_cSecVal'].str.strip()
             new_identities.index.name = 'insCode'
+            
             identities = pd.concat([identities, new_identities])
             
             # save to csv
@@ -278,10 +289,12 @@ def get_quotes(insCodes:Union[str,list], force_download=False): #? timeframe par
         #region#  <<<<<< LOG >>>>>>
         data_log.info('################## Daily Prices: Download Started ##################')
         #endregion#
+        
         download_daily_timeframe_to_csv()
         
         config.item['LAST_UPDATE']['DAILY_PRICES'] = _last_date
         config.save(config.item)
+        
         #region#  <<<<<< LOG >>>>>>
         data_log.info('################## Daily Prices: Download Successeded ##################')
         #endregion#
@@ -292,9 +305,7 @@ def get_quotes(insCodes:Union[str,list], force_download=False): #? timeframe par
 def download_daily_timeframe_to_csv():
     
     for insCode in _recent_instruments_df.index:
-        #region#  <<<<<< LOG >>>>>>
-        data_log.info(f'Take a Shot at insCode: {insCode}')
-        #endregion#
+        
         csv_file = f'./database/tickers_data/{insCode}.csv'
         instrument_last_update_date = time.strftime('%Y%m%d', time.localtime(os.path.getmtime(csv_file)))
         
@@ -304,6 +315,10 @@ def download_daily_timeframe_to_csv():
         
         # update instrument if it's new or out-of-date
         else:
+            #region#  <<<<<< LOG >>>>>>
+            data_log.info(f'Take a Shot at insCode: {insCode}')
+            #endregion#
+            
             resp = requests.get(
                 url=f"http://cdn.tsetmc.com/api/ClosingPrice/GetClosingPriceDailyListCSV/{insCode}/{insCode}",
                 headers=request_headers,
@@ -313,6 +328,7 @@ def download_daily_timeframe_to_csv():
             data = StringIO(resp.text)
             df = pd.read_csv(data)
             df.to_csv(f'{config.tickers_data_path}/{insCode}.csv')
+            
             #region#  <<<<<< LOG >>>>>>
             data_log.info(f'Daily Prices of {insCode} Downloaded and Saved as CSV.')
             #endregion#
@@ -338,8 +354,10 @@ def load_prices_csv(insCodes: list) -> dict:
     
     except (Exception) as e:
             print(f"Error: {e}")
+    
     #region#  <<<<<< LOG >>>>>>
     data_log.info('################## Daily Prices Loaded from Database ##################')
     #endregion#
+    
     return daily_prices
 
