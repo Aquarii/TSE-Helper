@@ -1,4 +1,4 @@
-from typing import Iterable
+from typing import Iterable, TypedDict
 from io import StringIO
 from glob import glob
 import os.path, time
@@ -19,6 +19,9 @@ import requests
 import json
 import pandas as pd
 
+class PriceQuotes(TypedDict):
+    insCode: str
+    quotes: pd.DataFrame
 
 request_headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36",
@@ -40,7 +43,7 @@ def api_last_possible_deven():
     )  # for debuging purposes
 
 
-def api_instruments(last_fetch):
+def api_instruments(last_fetch=0):
     '''
     last_fetch:\n\tDate after which Traded Instruments are needed.
     '''
@@ -59,7 +62,7 @@ def api_instruments(last_fetch):
             "lVal18AFC",
             "lVal30",
             "cIsin",
-            "lastDate",
+            "dEven",
             "flow",
             "lSoc30",
             "CGdSVal",
@@ -103,7 +106,7 @@ def api_instrument_and_share(last_fetch_date=0, last_record_id=0):
             "lVal18AFC",
             "lVal30",
             "cIsin",
-            "lastDate",
+            "dEven",
             "flow",
             "lSoc30",
             "CGdSVal",
@@ -143,7 +146,7 @@ def api_instrument_and_share(last_fetch_date=0, last_record_id=0):
 
 
 _last_date = api_last_possible_deven()
-_recent_instruments_df, _ = api_instrument_and_share(0, 0)
+_recent_instruments_df = api_instruments(0)
 
 
 ################################################################################################
@@ -152,18 +155,6 @@ _recent_instruments_df, _ = api_instrument_and_share(0, 0)
 
 def get_instruments():
     
-    # instruments_csv_path = str(config.db_path)+'/instruments.csv'
-    
-    # if config.item['LAST_UPDATE']['INSTRUMENTS'] == _last_date and path.isfile(instruments_csv_path):
-    #     instruments = pd.read_csv(
-    #         instruments_csv_path, index_col='insCode', 
-    #         dtype={
-    #             'insCode':str, 
-    #             'cComVal':str
-    #             }
-    #     )
-        
-    # else:
     instruments = _recent_instruments_df
     instruments.to_csv(str(config.db_path)+'/instruments.csv', quoting=1)
     
@@ -180,8 +171,7 @@ def get_last_update_dates():
     if not path.isfile(last_updates_csv_path):
         
         last_updates_df = pd.DataFrame()
-        last_updates_df.index = _recent_instruments_df.index
-        last_updates_df['lastDEven'] = _recent_instruments_df['lastDate']
+        last_updates_df = _recent_instruments_df[['dEven']]
         last_updates_df['daily'] = 0
         last_updates_df.to_csv(last_updates_csv_path, index=True, quoting=1)
         
@@ -192,9 +182,19 @@ def get_last_update_dates():
             index_col='insCode', 
             dtype={
                 'insCode':str, 
-                'lastDate':str
+                'dEven':str,
+                'daily':str
             }
         )
+        
+        if set(_recent_instruments_df.index) > set(last_updates_df.index):
+            
+            last_updates_df = _recent_instruments_df[['dEven']].merge(
+                last_updates_df['daily'], 
+                how= 'outer', 
+                on='insCode'
+            )
+            last_updates_df.to_csv(last_updates_csv_path, index=True, quoting=1)
         
     return last_updates_df
 
@@ -301,43 +301,40 @@ def get_identities() -> pd.DataFrame:
 ##                                INSTRUMENT PRICES OHLCV + CSV                                ##
 #################################################################################################
 
-def get_quotes(insCodes:str|Iterable, force_download=False): #? timeframe param "all"|"daily"|"2m"|"30m"
+def get_closing_prices_daily(
+    insCodes: str|Iterable[str], 
+    traded_instruments_only = True,
+    force_download= False
+) -> PriceQuotes:
+    #region# <<<<<< DOCSTRING >>>>>>
+    """Gets the latest update of given instruments. \
+        downloads closing price quotes if database is out-of-date, \
+        otherwise reads from database.
+
+    Args:
+        insCodes (str | Iterable[str]): Instruments' insCode(s)
+        force_download (bool, optional): Ignore and re-write database. Defaults to False.
+
+    Returns:
+        PriceQuotes: Prices in format: dict[key:str, value:pd.DataFrame]
+    """
+    #endregion#
     
     if isinstance(insCodes,str):
         insCodes = [insCodes] 
     
-    if config.item['LAST_UPDATE']['DAILY_QUOTES'] < _last_date:
-        print('Database is Outdated. Updating... Please Wait...')
-        force_download = True
+    if insCodes == ['all']:
+        insCodes = _recent_instruments_df.index
     
-    if force_download:
-        #region#  <<<<<< LOG >>>>>>
-        data_log.info('################## Daily Prices: Download Started ##################')
-        #endregion#
-        
-        if insCodes == ['all']:
-            insCodes = _recent_instruments_df.index
-        
-        download_daily_timeframe_to_csv(insCodes, force_download)
-        
-        config.item['LAST_UPDATE']['DAILY_QUOTES'] = _last_date
-        config.save(config.item)
-        
-        #region#  <<<<<< LOG >>>>>>
-        data_log.info('################## Daily Prices: Download Successeded ##################')
-        #endregion#
-    
-    return load_prices_csv(insCodes)
-
-
-def download_daily_timeframe_to_csv(insCodes: Iterable[str], force_download= False) -> None:
-    
+    #region#  <<<<<< LOG >>>>>>
+    data_log.info('################## Download Started: Daily Prices ##################')
+    #endregion#
     
     for insCode in insCodes:
         
         last_updates_df = get_last_update_dates()
         
-        # skip instrument if it's up-to-date
+        # skip instrument if it's up-to-date or download not forced
         if (
             not force_download and
             path.isfile(f'{config.tickers_data_path}/{insCode}.csv') and
@@ -345,8 +342,9 @@ def download_daily_timeframe_to_csv(insCodes: Iterable[str], force_download= Fal
         ):
             continue
         
-        # update instrument if it's new or out-of-date
+        # update instrument if it's new or out-of-date or forced
         else:
+            #TODO: catch error 500 and print appropriate notice
             #region#  <<<<<< LOG >>>>>>
             data_log.info(f'Take a Shot at Daily Quotes of: {insCode}')
             #endregion#
@@ -361,30 +359,46 @@ def download_daily_timeframe_to_csv(insCodes: Iterable[str], force_download= Fal
                 file.write(resp.content)
             
             last_updates_df.at[insCode,'daily'] = _last_date
-            last_updates_df.to_csv(f'{config.db_path}/last_updates.csv')
+            last_updates_df.to_csv(f'{config.db_path}/last_updates.csv', index=True, quoting=1)
             
             #region#  <<<<<< LOG >>>>>>
             data_log.info(f'Daily Prices of {insCode} Downloaded and Saved as CSV.')
             #endregion#
+    
+    #region#  <<<<<< LOG >>>>>>
+    data_log.info('################## Download Successeded: Daily Prices ##################')
+    #endregion#
+    
+    quotes = load_quotes_csv(insCodes)
+    
+    return {
+        key: quotes[key] 
+        for key in quotes.keys() 
+        if quotes[key].index[-1] == _last_date
+    } if traded_instruments_only else quotes
 
-
-################################################################################################
-#                                     LOAD PRICES FROM CSV                                     #
-################################################################################################
 
 @calculate_MA
 @clean_data(remove_days_with_no_trades=True)
-def load_prices_csv(insCodes: list) -> dict: 
+def load_quotes_csv(insCodes: list) -> PriceQuotes: 
     try:        
         daily_prices = {insCode: pd.read_csv(
             f'{config.tickers_data_path}/{insCode}.csv',
             dtype={
-                "<LOW>": "float32",
-                "<HIGH>": "float32",
-                "<OPEN>": "float32",
-                # "<VALUE>": "uint64",
+                "<TICKER>": str,
+                "<DTYYYYMMDD>": str,
+                "<FIRST>": "float64",
+                "<HIGH>": "float64",
+                "<LOW>": "float64",
+                "<CLOSE>": "float64",
+                "<VALUE>": "float64",
+                "<VOL>": "int64",
+                "<OPENINT>": "int64",
+                "<PER>": str,
+                "<OPEN>": "float64",
+                "<LAST>": "float64"
             }
-        ) for insCode in insCodes}
+        ).sort_index(ascending=True) for insCode in insCodes} # sort just in case 
     
     except (Exception) as e:
             print(f"Error: {e}")

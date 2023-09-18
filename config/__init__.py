@@ -25,7 +25,6 @@ default_items = {
     'LAST_UPDATE': {
         'INSTRUMENTS': 0, 
         'IDENTITY': 0,
-        'DAILY_QUOTES': 0,
         # ---------------------^-------------------
         'CAPITAL_INCREASE': 0,
         'INSTRUMENT_TYPES': datetime(2000, 1, 1).date()
