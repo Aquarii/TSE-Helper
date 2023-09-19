@@ -4,6 +4,7 @@ from glob import glob
 import os.path, time
 from os import path
 import zeep
+from tenacity import retry, retry_if_exception_type, wait_random, stop_after_attempt
 from utils import (
     debug_log,
     data_log,
@@ -153,15 +154,32 @@ _recent_instruments_df = api_instruments(0)
 #                                           INSTRUMENTS                                        #
 ################################################################################################
 
-def get_instruments():
+def get_catalogue():
     
     instruments = _recent_instruments_df
-    instruments.to_csv(str(config.db_path)+'/instruments.csv', quoting=1)
+    instruments.to_csv(f'{config.db_path}/instruments.csv', quoting=1) # Dev-Only. Original Data 
     
-    config.item['LAST_UPDATE']['INSTRUMENTS'] = _last_date
-    config.save(config.item)
+    identities = get_identities()
+    updates = get_last_update_dates()
     
-    return instruments
+    catalogue = instruments.merge(
+        identities[[
+            'lSecVal',
+            'lSoSecVal',
+            'cgrValCotTitle'
+        ]], 
+        how='outer', 
+        on='insCode'
+    )
+    catalogue = catalogue.merge(
+        updates['daily'], 
+        how='outer', 
+        on='insCode'
+    )
+    
+    catalogue.to_csv(f'{config.db_path}/catalogue.csv', quoting=1)
+    
+    return catalogue
 
 
 def get_last_update_dates():
@@ -173,7 +191,7 @@ def get_last_update_dates():
         last_updates_df = pd.DataFrame()
         last_updates_df = _recent_instruments_df[['dEven']]
         last_updates_df['daily'] = 0
-        last_updates_df.to_csv(last_updates_csv_path, index=True, quoting=1)
+        last_updates_df.to_csv(last_updates_csv_path, index=True, quoting=1) # Dev-Only. Original Data 
         
     else:
         
@@ -194,7 +212,7 @@ def get_last_update_dates():
                 how= 'outer', 
                 on='insCode'
             )
-            last_updates_df.to_csv(last_updates_csv_path, index=True, quoting=1)
+            last_updates_df.to_csv(last_updates_csv_path, index=True, quoting=1) # Dev-Only. Original Data 
         
     return last_updates_df
 
@@ -203,6 +221,11 @@ def get_last_update_dates():
 #                                           IDENTITY                                           #
 ################################################################################################
 
+# @retry(
+#     retry=retry_if_exception_type(requests.exceptions.HTTPError),
+#     wait=wait_random(min=1, max=4),
+#     stop=stop_after_attempt(7)
+# )
 def get_identity(insCode:str) -> dict:
     
     #region#  <<<<<< LOG >>>>>>
@@ -212,10 +235,10 @@ def get_identity(insCode:str) -> dict:
     result = requests.get(
         config.item['URI']['IDENTITY'].format(insCode), headers=request_headers, cookies=cookie_jar
     )
-    result.raise_for_status()  # raises exception when not a 2xx response
     result = json.loads(result.text)
     
     #region#  <<<<<< LOG >>>>>>
+    # data_log.info(get_identity.retry.statistics)
     data_log.info(f'Identity of "{insCode}" recieved correctly.')
     #endregion#
     
@@ -231,15 +254,32 @@ def init_identities() -> pd.DataFrame:
     all_tickers_except_indices = _recent_instruments_df[_recent_instruments_df['cComVal'] != '6'].index
     identities = pd.DataFrame(
         {insCode:get_identity(insCode) for insCode in all_tickers_except_indices}
+    ).drop(
+        [
+            'sector_dEven', 
+            'subSector_dEven', 
+            'subSector_cSecVal', 
+            'insCode',
+            'flow'
+        ], 
+        axis=0
     ).transpose()
-    identities['sector_cSecVal'] = identities['sector_cSecVal'].str.strip()
+    identities.rename(
+        columns= {
+            col_name:col_name.split('_')[-1] 
+            for col_name in identities.columns 
+            if '_' in col_name
+        }, 
+        inplace= True
+    )
+    identities['cSecVal'] = identities['cSecVal'].str.strip()
     identities.index.name = 'insCode'
     
     #region#  <<<<<< LOG >>>>>>
     data_log.info('################### Initializing Identities Finished ###################')
     #endregion#
     
-    # Save to CSV
+    # Save to CSV # Dev-Only. Original Data 
     identities.to_csv(str(config.db_path) + '/identities.csv', quoting=1) #make it 5 after update to python 3.12 
     
     return identities
@@ -255,8 +295,8 @@ def get_identities() -> pd.DataFrame:
             index_col='insCode', 
             dtype={
                 'insCode': str, 
-                'sector_cSecVal': str,
-                'subSector_cSoSecVal': str,
+                'cSecVal': str,
+                'cSoSecVal': str,
                 'yVal': str,
                 'flow': str,
                 'cComVal': str,
@@ -273,13 +313,29 @@ def get_identities() -> pd.DataFrame:
             
             new_identities = pd.DataFrame(
                 {insCode:get_identity(insCode) for insCode in new_instruments}
+            ).drop(
+                [
+                    'sector_dEven', 
+                    'subSector_dEven', 
+                    'subSector_cSecVal', 
+                    'insCode'
+                ], 
+                axis=0
             ).transpose()
-            new_identities['sector_cSecVal'] = new_identities['sector_cSecVal'].str.strip()
+            new_identities.rename(
+                columns= {
+                    col_name:col_name.split('_')[-1] 
+                    for col_name in new_identities.columns 
+                    if '_' in col_name
+                }, 
+                inplace= True
+            )
+            new_identities['cSecVal'] = new_identities['cSecVal'].str.strip()
             new_identities.index.name = 'insCode'
             
             identities = pd.concat([identities, new_identities])
             
-            # save to csv
+            # save to csv # Dev-Only. Original Data
             identities.to_csv(str(config.db_path) + '/identities.csv', quoting=1) #make it 5 after update to python 3.12 
         
         else:
@@ -287,13 +343,13 @@ def get_identities() -> pd.DataFrame:
             data_log.info('No New (Non-Index) Instruements.')
             #endregion#
         
-        config.item['LAST_UPDATE']['IDENTITY'] = _last_date # Obsolete! Effective date is last_update_instruments. will keep it for now.
-        config.save(config.item)
+        # config.item['LAST_UPDATE']['IDENTITY'] = _last_date # Obsolete! Effective date is last_update_instruments. will keep it for now.
+        # config.save(config.item)
         
         return identities
     
     else:
-        print('"identities.csv" file doesn\'t exists. re-downloading its data... aprox. 20 mins.')
+        print('"identities.csv" Not Found. Downloading... ~3m-20m (Night/Rush Hour)')
         return init_identities()
 
 
